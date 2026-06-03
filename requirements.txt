@@ -1,0 +1,5 @@
+# 런타임 의존성 (Stage 2 에서 사용). 순수 코어(strategy.py/atr.py)는 표준 라이브러리만 사용.
+ccxt>=4.3,<5
+PyYAML>=6,<7
+python-dotenv>=1,<2
+requests>=2.31,<3

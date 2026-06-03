@@ -1,0 +1,29 @@
+# June 무한매수법 봇 설정. 전략 파라미터의 단일 출처는 CLAUDE.md.
+mode: dry-run            # dry-run(모의·기본) | testnet(Binance spot testnet) | live(실거래)
+symbol: BTC/USDT
+
+# 전략 (CLAUDE.md §3 고정값)
+n: 40                    # 분할 수
+tp: 0.10                 # 익절 +10% (순수익)
+atr_period: 14           # ATR14
+x_mult: 2.0              # X = 2 × ATR/price
+x_floor: 0.03            # X 하한 3% (상한 없음)
+fallback_hours: 24       # 24h 폴백 시장가
+
+# 실행
+poll_seconds: 30         # 폴링 주기
+daily_ohlcv_limit: 150   # ATR 평활용 일봉 개수
+taker_fee: 0.001         # taker ≈ 0.1%
+slippage: 0.0005         # dry-run/backtest 모의 슬리피지
+seed_usdt: 1000          # dry-run 가상 시드 (testnet/live 는 거래소 잔고를 사용)
+
+# 영속/운영
+state_db: data/june_bot.db
+log_file: data/june_bot.log
+kill_switch_file: KILL   # 이 파일이 존재하면 봇이 안전 정지
+
+# live 이중 가드 (둘 다 + 환경변수 JUNE_BOT_ALLOW_LIVE=YES_I_UNDERSTAND 필요)
+i_understand_live: false
+
+telegram:
+  enabled: false         # 토큰/챗ID 는 .env 로 주입

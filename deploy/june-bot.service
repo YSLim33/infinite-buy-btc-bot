@@ -1,0 +1,21 @@
+# systemd 유닛 (Docker 대안). Debian 12 e2-micro.
+# 설치: sudo cp deploy/june-bot.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#       sudo systemctl enable --now june-bot
+[Unit]
+Description=June 무한매수법 BTC 봇
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=junebot
+WorkingDirectory=/opt/june-bot
+EnvironmentFile=/opt/june-bot/.env
+ExecStart=/opt/june-bot/.venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

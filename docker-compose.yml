@@ -1,0 +1,15 @@
+services:
+  june-bot:
+    build: .
+    container_name: june-bot
+    env_file: .env
+    restart: always          # 크래시/재부팅 자동 재시작
+    stop_grace_period: 30s    # graceful shutdown 여유
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data      # SQLite 상태 + 로그 영속
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
