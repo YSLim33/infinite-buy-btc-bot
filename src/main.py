@@ -1,7 +1,7 @@
 """엔트리포인트 — 설정/로깅 초기화, 모드 분기, 부팅 reconcile, 폴링 루프, graceful shutdown.
 
-실행 모드: dry-run(기본) / testnet / live. **live 는 환경변수 + config 이중 가드**(§4).
-출금 API 는 사용하지 않는다.
+실행 모드: dry-run(기본) / live. **live 는 환경변수 + config 이중 가드**(§4).
+거래소는 config `exchange`(기본 kraken). 출금 API 는 사용하지 않는다.
 """
 
 from __future__ import annotations
@@ -64,19 +64,19 @@ def build_params(cfg: dict, min_notional: float) -> Params:
 def build_exchange(cfg: dict):
     mode = cfg["mode"]
     symbol = cfg["symbol"]
+    exchange_id = cfg.get("exchange", "kraken")
     if mode == "dry-run":
         return PaperExchange(
             symbol,
+            exchange_id=exchange_id,
             seed_usdt=float(cfg["seed_usdt"]),
             taker_fee=float(cfg["taker_fee"]),
             slippage=float(cfg["slippage"]),
         )
-    key = os.environ.get("BINANCE_API_KEY", "")
-    secret = os.environ.get("BINANCE_API_SECRET", "")
+    key = os.environ.get("KRAKEN_API_KEY", "")
+    secret = os.environ.get("KRAKEN_API_SECRET", "")
     if not key or not secret:
-        raise SystemExit("BINANCE_API_KEY/SECRET 가 .env 에 필요합니다 (testnet/live).")
-    if mode == "testnet":
-        return CcxtExchange(key, secret, symbol, testnet=True)
+        raise SystemExit("KRAKEN_API_KEY/SECRET 가 .env 에 필요합니다 (live).")
     if mode == "live":
         # 이중 가드: config 플래그 + 환경변수 둘 다 명시돼야 실거래.
         if (
@@ -86,8 +86,8 @@ def build_exchange(cfg: dict):
             raise SystemExit(
                 "LIVE 거부: config 의 i_understand_live: true 와 환경변수 JUNE_BOT_ALLOW_LIVE=YES_I_UNDERSTAND 가 모두 필요합니다."
             )
-        return CcxtExchange(key, secret, symbol, testnet=False)
-    raise SystemExit(f"알 수 없는 mode: {mode}")
+        return CcxtExchange(exchange_id, key, secret, symbol)
+    raise SystemExit(f"알 수 없는 mode: {mode} (dry-run|live)")
 
 
 def _refresh_atr(exchange, cfg: dict) -> float:

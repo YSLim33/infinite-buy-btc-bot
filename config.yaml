@@ -1,6 +1,7 @@
 # June 무한매수법 봇 설정. 전략 파라미터의 단일 출처는 CLAUDE.md.
-mode: dry-run            # dry-run(모의·기본) | testnet(Binance spot testnet) | live(실거래)
-symbol: BTC/USDT
+mode: dry-run            # dry-run(모의·기본) | live(실거래). Kraken 은 현물 testnet 없음.
+exchange: kraken         # CCXT 거래소 id (Kraken 은 미국 IP 허용 → 무료 US GCP 가능)
+symbol: BTC/USDT         # 대안 BTC/USD (유동성↑이나 USDT→USD 환전 필요)
 
 # 전략 (CLAUDE.md §3 고정값)
 n: 40                    # 분할 수
@@ -13,9 +14,9 @@ fallback_hours: 24       # 24h 폴백 시장가
 # 실행
 poll_seconds: 30         # 폴링 주기
 daily_ohlcv_limit: 150   # ATR 평활용 일봉 개수
-taker_fee: 0.001         # taker ≈ 0.1%
+taker_fee: 0.004         # Kraken Pro 저볼륨 taker ≈ 0.4% (TP 매도측 손익분기 기준)
 slippage: 0.0005         # dry-run/backtest 모의 슬리피지
-seed_usdt: 1000          # dry-run 가상 시드 (testnet/live 는 거래소 잔고를 사용)
+seed_usdt: 1000          # dry-run 가상 시드 (live 는 거래소 잔고를 사용)
 
 # 영속/운영
 state_db: data/june_bot.db

@@ -219,8 +219,17 @@ def main() -> None:
     ap.add_argument("--start", required=True, help="YYYY-MM-DD (UTC)")
     ap.add_argument("--end", default=None, help="YYYY-MM-DD (UTC), 기본 현재")
     ap.add_argument("--seed", type=float, default=1000.0)
+    ap.add_argument(
+        "--fee",
+        type=float,
+        default=0.004,
+        help="taker 수수료 (Kraken 0.004 / Binance 0.001 — 수수료 영향 비교용)",
+    )
     a = ap.parse_args()
 
+    # 과거 데이터는 Binance 에서 수집한다(Kraken 공개 OHLC 는 timeframe 당 ~720개만 제공 →
+    # 다개월 시간봉 백테스트 불가). BTC 가격은 거래소 무관 ≈동일하므로, 수수료(--fee)만
+    # Kraken 값으로 바꿔 손익·MDD 영향을 평가한다.
     client = ccxt.binance({"enableRateLimit": True})
     client.load_markets()
     m = client.market(a.symbol)
@@ -245,7 +254,7 @@ def main() -> None:
     daily = _fetch_ohlcv(client, a.symbol, "1d", start_ms - 60 * 86_400_000, end_ms)
     hourly = _fetch_ohlcv(client, a.symbol, "1h", start_ms, end_ms)
 
-    params = Params()
+    params = Params(taker_fee=a.fee)
     stats = run_backtest(
         daily,
         hourly,
@@ -257,7 +266,8 @@ def main() -> None:
         tick=tick,
     )
     print(
-        f"\n=== Backtest {a.symbol} {a.start}~{a.end or 'now'} (seed {a.seed:.0f} USDT) ==="
+        f"\n=== Backtest {a.symbol} {a.start}~{a.end or 'now'} "
+        f"(seed {a.seed:.0f} USDT, fee {a.fee * 100:.2f}%) ==="
     )
     print(f"기간 시간봉 수      : {stats['bars']}")
     print(f"완료 사이클(익절)   : {stats['cycles_completed']}")
