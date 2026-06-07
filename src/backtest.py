@@ -54,6 +54,9 @@ class BacktestExchange:
     def fetch_free_usdt(self):
         return self.free_usdt
 
+    def fetch_total_usdt(self):
+        return self.free_usdt  # 백테스트는 예약 없음 → total == free (Stage 2.5 감지용)
+
     def fetch_base_balance(self):
         return self.base_balance
 

@@ -40,6 +40,9 @@ class Params:
     min_notional: float = (
         5.0  # 거래소 최소 주문금액 가드 (§4). exchange.py가 실값으로 갱신.
     )
+    topup_enabled: bool = True  # 잔고변화(입금/출금) 재분할 on/off (Stage 2.5)
+    topup_threshold: float = 10.0  # 잔고변화 판단 임계 USDT (Stage 2.5)
+    topup_immediate_buy_on_deposit: bool = True  # 입금 시 즉시 시장가 1매수 (Stage 2.5)
 
 
 # ----------------------------------------------------------------------------
@@ -257,6 +260,28 @@ def start_cycle(cash: float, params: Params, cycle_id: int) -> State:
         step_target_usdt=tranche,  # 부트스트랩 시장가 1매수 스텝
         step_filled_usdt=0.0,
         open_limit=None,
+    )
+
+
+def apply_topup(state: State, available_usdt: float, params: Params) -> State:
+    """잔고변화(입금/출금) 시 가용 USDT 전체를 N 재분할 (Stage 2.5).
+
+    재분할만 수행 — 현금/tranche 재계산, tranches_used=0, 진행 스텝 비움. 기존 포지션·평단·
+    추격기준·익절은 그대로 유지: position_qty, invested_usdt, ref, last_fill_time, cycle_id 보존.
+    열린 지정가(open_limit) 정리는 executor 책임(체결분 폴딩 후 취소).
+    status: 기본 RUNNING(CASH_EXHAUSTED→RUNNING 재개 포함). 단 가용현금이 최소주문 미만이고
+    포지션 보유 중이면 CASH_EXHAUSTED — 신규매수 중단, +10% 익절은 계속 감시(HALT 아님).
+    """
+    tranche = compute_tranche(available_usdt, params.n)
+    exhausted = available_usdt < params.min_notional and state.position_qty > 0
+    return replace(
+        state,
+        status=Status.CASH_EXHAUSTED if exhausted else Status.RUNNING,
+        tranche_usdt=tranche,
+        tranches_used=0,
+        cycle_cash_remaining=available_usdt,
+        step_target_usdt=0.0,
+        step_filled_usdt=0.0,
     )
 
 

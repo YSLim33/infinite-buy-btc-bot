@@ -17,6 +17,7 @@ from src.strategy import (
     State,
     Status,
     apply_buy_fill,
+    apply_topup,
     can_buy,
     compute_tranche,
     decide,
@@ -275,3 +276,55 @@ def test_round_price():
 def test_meets_min_notional():
     assert meets_min_notional(50000.0, 0.0001, 5.0) is True  # 5.0 >= 5
     assert meets_min_notional(50000.0, 0.00009, 5.0) is False  # 4.5 < 5
+
+
+# --- 입금 재분할 apply_topup (Stage 2.5) ---------------------------------------
+def test_apply_topup_resplits_and_preserves_position():
+    s = S(
+        tranches_used=10,
+        cycle_cash_remaining=2000.0,
+        position_qty=0.05,
+        invested_usdt=2500.0,
+        ref=48000.0,
+        last_fill_time=T0,
+        cycle_id=3,
+    )
+    out = apply_topup(s, 5000.0, P)
+    # 재분할
+    assert out.cycle_cash_remaining == 5000.0
+    assert out.tranche_usdt == pytest.approx(5000.0 / 40)
+    assert out.tranches_used == 0
+    assert out.status == Status.RUNNING
+    assert out.step_target_usdt == 0.0 and out.step_filled_usdt == 0.0
+    # 보존
+    assert out.position_qty == 0.05
+    assert out.invested_usdt == 2500.0
+    assert out.ref == 48000.0
+    assert out.last_fill_time == T0
+    assert out.cycle_id == 3
+
+
+def test_apply_topup_resumes_from_cash_exhausted():
+    s = S(
+        status=Status.CASH_EXHAUSTED,
+        tranches_used=40,
+        cycle_cash_remaining=0.5,
+        position_qty=0.08,
+        invested_usdt=4000.0,
+    )
+    out = apply_topup(s, 1000.0, P)
+    assert out.status == Status.RUNNING
+    assert out.tranches_used == 0
+    assert out.tranche_usdt == pytest.approx(25.0)
+    assert out.position_qty == 0.08  # 포지션 보존
+    assert out.invested_usdt == 4000.0
+
+
+def test_apply_topup_cash_exhausted_when_below_min_with_position():
+    # 출금으로 가용 < min_notional & 포지션 보유 → CASH_EXHAUSTED (신규매수 중단, TP 계속)
+    s = S(position_qty=0.05, invested_usdt=2500.0)
+    out = apply_topup(s, 2.0, P)  # 2 < min_notional(5)
+    assert out.status == Status.CASH_EXHAUSTED
+    assert out.tranches_used == 0
+    assert out.position_qty == 0.05  # 보존
+    assert out.invested_usdt == 2500.0

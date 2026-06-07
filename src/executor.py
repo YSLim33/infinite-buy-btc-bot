@@ -25,9 +25,12 @@ from src.strategy import (
     State,
     Status,
     apply_buy_fill,
+    apply_topup,
+    can_buy,
     decide,
     on_limit_canceled,
     on_limit_placed,
+    should_take_profit,
     start_cycle,
     update_limit_seen,
 )
@@ -113,13 +116,63 @@ def execute_action(
     return state, False
 
 
+def check_and_apply_topup(state, exchange, params, notifier, now: datetime) -> State:
+    """잔고변화(입금/출금) 감지 → 40 재분할(Stage 2.5). 사이클·포지션·평단·ref·익절은 보존.
+
+    감지: 거래소 **total USDT**(전용계정에서 free + 미체결 매수 예약분 = 봇 미투입 USDT)와
+    cycle_cash_remaining 차이. |delta| 가 임계 초과면 입출금으로 처리.
+    봇 자신의 매수(현금↓)·익절(start_cycle 리셋)은 기준이 state 라 자연 분리 → 오탐 없음.
+    멱등(적용 후 cycle_cash_remaining=가용 → 다음 폴 재트리거 없음). HALTED/비활성이면 미적용.
+    USDT 변화로는 HALT 하지 않는다(출금은 정상 축소 — HALT 은 reconcile 의 BTC 불일치 등만).
+    """
+    if not params.topup_enabled or state.status == Status.HALTED:
+        return state
+
+    available = exchange.fetch_total_usdt()
+    delta = available - state.cycle_cash_remaining
+    threshold = max(params.min_notional, params.topup_threshold)
+    if abs(delta) <= threshold:  # 의미있는 변화 아님(봇 자체 활동·미세 드리프트)
+        return state
+
+    # 익절 시점이면 topup 건너뜀 — TP 가 새 사이클에서 잔여현금(입출금 포함)을 흡수.
+    if should_take_profit(state, exchange.fetch_price(), params):
+        return state
+
+    # 열린 지정가는 (refresh 로 체결분 이미 폴딩됨) 취소 — 다음 decide 가 새 트랜치로 재설치.
+    if state.open_limit is not None:
+        order = exchange.cancel_order(state.open_limit.id)
+        state = _fold_order_progress(state, order, now, params, notifier)
+        if state.open_limit is not None:
+            state = on_limit_canceled(state)
+
+    avail = exchange.fetch_total_usdt()  # 취소 후 실제 가용 = 재분할 기준
+    state = apply_topup(state, avail, params)
+    kind = "deposit" if delta > 0 else "withdrawal"
+    notifier.notify(
+        f"[TOPUP] {kind} {delta:+.2f} USDT → re-split {avail:.2f} into "
+        f"{params.n} (tranche {state.tranche_usdt:.2f}, {state.status.value})"
+    )
+
+    # 입금이면 즉시 1 tranche 시장가 매수(부트스트랩식) → 새 ref. 출금이면 매수 없음.
+    if delta > 0 and params.topup_immediate_buy_on_deposit and can_buy(state, params):
+        usdt = min(state.tranche_usdt, state.cycle_cash_remaining)
+        state = replace(state, step_target_usdt=usdt, step_filled_usdt=0.0)
+        state, _ = execute_action(
+            MarketBuy(usdt), state, exchange, params, notifier, now
+        )
+    return state
+
+
 def run_poll_once(
     state, exchange, params, notifier, now: datetime, atr14: float
 ) -> State:
-    """폴링 1회: 체결 감지 → 재결정 루프(즉시 후속행동까지) → 실행."""
+    """폴링 1회: 체결 감지 → 입금 재분할 → 재결정 루프(즉시 후속행동까지) → 실행."""
     if state.status == Status.HALTED:
         return state
     state = refresh_open_limit(state, exchange, now, params, notifier)
+    state = check_and_apply_topup(state, exchange, params, notifier, now)
+    if state.status == Status.HALTED:
+        return state
     for _ in range(MAX_STEPS_PER_POLL):
         market = Market(price=exchange.fetch_price(), atr14=atr14, now=now)
         actions = decide(state, market, params)
@@ -170,4 +223,5 @@ def reconcile(stored: State | None, exchange, params, notifier, now: datetime) -
     notifier.notify(
         f"[RESUME] cycle {state.cycle_id}, qty {state.position_qty:.6f}, status {state.status.value}"
     )
-    return state
+    # boot 시 다운 중 입금 반영(Stage 2.5).
+    return check_and_apply_topup(state, exchange, params, notifier, now)

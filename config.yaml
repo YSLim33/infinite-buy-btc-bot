@@ -11,6 +11,11 @@ x_mult: 2.0              # X = 2 × ATR/price
 x_floor: 0.03            # X 하한 3% (상한 없음)
 fallback_hours: 24       # 24h 폴백 시장가
 
+# 잔고변화(입금/출금) 감지 → 40 재분할 (Stage 2.5)
+topup_enabled: true                  # 잔고변화 감지·재분할 on/off (마스터 스위치)
+topup_threshold: 10                  # 판단 임계 USDT (|미투입현금 변화| 가 이보다 크면 재분할)
+topup_immediate_buy_on_deposit: true # 입금 시 재분할 직후 즉시 시장가 1매수 (출금은 축소만)
+
 # 실행
 poll_seconds: 30         # 폴링 주기
 daily_ohlcv_limit: 150   # ATR 평활용 일봉 개수

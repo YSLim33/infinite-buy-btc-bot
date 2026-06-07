@@ -137,6 +137,11 @@ class CcxtExchange:
         bal = self._retry(lambda: self.client.fetch_balance())
         return float(bal["free"].get(self._quote, 0.0))
 
+    def fetch_total_usdt(self) -> float:
+        # 미투입 USDT 전체(free + 미체결 매수에 예약된 quote). 입금 감지용(Stage 2.5).
+        bal = self._retry(lambda: self.client.fetch_balance())
+        return float(bal["total"].get(self._quote, 0.0))
+
     def fetch_base_balance(self) -> float:
         bal = self._retry(lambda: self.client.fetch_balance())
         return float(bal["free"].get(self._base, 0.0))
@@ -300,6 +305,10 @@ class PaperExchange:
         return self._public.fetch_ohlcv(self.symbol, timeframe="1d", limit=limit)
 
     def fetch_free_usdt(self) -> float:
+        return self.free_usdt
+
+    def fetch_total_usdt(self) -> float:
+        # 페이퍼는 미체결 지정가에 예약을 두지 않으므로 total == free (입금 감지용, Stage 2.5).
         return self.free_usdt
 
     def fetch_base_balance(self) -> float:

@@ -58,6 +58,11 @@ def build_params(cfg: dict, min_notional: float) -> Params:
         x_floor=float(cfg["x_floor"]),
         fallback_hours=float(cfg["fallback_hours"]),
         min_notional=float(min_notional),
+        topup_enabled=bool(cfg.get("topup_enabled", True)),
+        topup_threshold=float(cfg.get("topup_threshold", 10.0)),
+        topup_immediate_buy_on_deposit=bool(
+            cfg.get("topup_immediate_buy_on_deposit", True)
+        ),
     )
 
 
