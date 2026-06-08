@@ -35,6 +35,7 @@ class FakeKraken:
         self.seq = 0
         self.calls: list[tuple] = []  # 생성/취소 호출 로그
         self.buy_cost_supported = True
+        self.timeout = None  # CcxtExchange 가 주입 client 에 timeout 설정함(Stage 2.7)
 
     # --- 메타/조회 ---
     def load_markets(self):
@@ -305,3 +306,15 @@ def test_retry_does_not_retry_invalid_nonce(monkeypatch):
     with pytest.raises(ccxt.InvalidNonce):
         ex.fetch_free_usdt()
     assert calls["n"] == 1  # 재시도 없이 즉시 전파
+
+
+# --- ccxt 타임아웃 (Stage 2.7 — 네트워크 호출 행 방지) ----------------------
+def test_ccxt_default_timeout():
+    ex, fake = _ex()
+    assert fake.timeout == 20000  # 기본값이 주입 client 에 적용됨
+
+
+def test_ccxt_timeout_applied_to_injected_client():
+    fake = FakeKraken()
+    CcxtExchange("kraken", "k", "s", "BTC/USDT", client=fake, timeout_ms=12345)
+    assert fake.timeout == 12345
