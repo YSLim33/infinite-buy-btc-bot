@@ -76,14 +76,27 @@ class CcxtExchange:
         symbol: str = "BTC/USDT",
         *,
         client=None,
+        timeout_ms: int = 20000,
     ):
         import ccxt  # 지연 import — 페이퍼/백테스트 경로에선 불필요
 
         self._ccxt = ccxt
         self.symbol = symbol
-        self.client = client or getattr(ccxt, exchange_id)(
-            {"apiKey": api_key, "secret": secret, "enableRateLimit": True}
-        )
+        if client is None:
+            client = getattr(ccxt, exchange_id)(
+                {
+                    "apiKey": api_key,
+                    "secret": secret,
+                    "enableRateLimit": True,
+                    "timeout": timeout_ms,  # 네트워크 호출 행 방지(워치독의 1차 방어선)
+                }
+            )
+        else:
+            try:  # 주입된 client 에도 적용(ccxt 런타임 knob; 테스트가 검증)
+                client.timeout = timeout_ms
+            except Exception:
+                pass
+        self.client = client
         self.client.load_markets()
         self._market = self.client.market(symbol)
         self._base = self._market["base"]
@@ -249,11 +262,14 @@ class PaperExchange:
         seed_usdt: float,
         taker_fee: float = 0.004,
         slippage: float = 0.0005,
+        timeout_ms: int = 20000,
     ):
         import ccxt
 
         self.symbol = symbol
-        self._public = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+        self._public = getattr(ccxt, exchange_id)(
+            {"enableRateLimit": True, "timeout": timeout_ms}
+        )
         self._public.load_markets()
         m = self._public.market(symbol)
         self._base = m["base"]

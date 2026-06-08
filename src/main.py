@@ -22,6 +22,7 @@ from src.executor import reconcile, run_poll_once
 from src.notifier import build_notifier
 from src.state import StateStore
 from src.strategy import Params, Status
+from src.watchdog import Heartbeat, start_watchdog
 
 log = logging.getLogger("june_bot")
 _STOP = False
@@ -70,6 +71,7 @@ def build_exchange(cfg: dict):
     mode = cfg["mode"]
     symbol = cfg["symbol"]
     exchange_id = cfg.get("exchange", "kraken")
+    timeout_ms = int(cfg.get("ccxt_timeout_ms", 20000))  # 네트워크 호출 행 방지
     if mode == "dry-run":
         return PaperExchange(
             symbol,
@@ -77,6 +79,7 @@ def build_exchange(cfg: dict):
             seed_usdt=float(cfg["seed_usdt"]),
             taker_fee=float(cfg["taker_fee"]),
             slippage=float(cfg["slippage"]),
+            timeout_ms=timeout_ms,
         )
     key = os.environ.get("KRAKEN_API_KEY", "")
     secret = os.environ.get("KRAKEN_API_SECRET", "")
@@ -91,7 +94,7 @@ def build_exchange(cfg: dict):
             raise SystemExit(
                 "LIVE 거부: config 의 i_understand_live: true 와 환경변수 JUNE_BOT_ALLOW_LIVE=YES_I_UNDERSTAND 가 모두 필요합니다."
             )
-        return CcxtExchange(exchange_id, key, secret, symbol)
+        return CcxtExchange(exchange_id, key, secret, symbol, timeout_ms=timeout_ms)
     raise SystemExit(f"알 수 없는 mode: {mode} (dry-run|live)")
 
 
@@ -118,6 +121,12 @@ def main(config_path: str = "config.yaml") -> None:
         os.environ.get("TELEGRAM_CHAT_ID"),
     )
 
+    # 라이브니스 워치독 설정 (모두 cfg.get 기본값 — VM 의 기존 config 호환)
+    hb_path = cfg.get("heartbeat_file", "data/.heartbeat")
+    wd_timeout = float(cfg.get("watchdog_timeout_seconds", 600))
+    wd_interval = float(cfg.get("watchdog_interval_seconds", 15))
+    heartbeat = Heartbeat(path=hb_path)
+
     stored = store.load()
     if cfg["mode"] == "dry-run" and stored is not None:
         exchange.resume_from(stored)  # 드라이런 가상잔고를 저장상태로 복원
@@ -137,8 +146,20 @@ def main(config_path: str = "config.yaml") -> None:
     poll = int(cfg["poll_seconds"])
     kill_file = cfg.get("kill_switch_file", "KILL")
     notifier.notify(f"[UP] june-bot running ({cfg['mode']})")
+    heartbeat.beat()  # baseline 박동 후 워치독 데몬 시작
+    start_watchdog(
+        heartbeat,
+        wd_timeout,
+        notifier,
+        stop_check=lambda: _STOP,  # graceful shutdown 중엔 워치독 무발화
+        interval_seconds=wd_interval,
+    )
+    first_poll_ok = False
 
     while not _STOP:
+        # 라이브니스: 루프가 이번 반복에 도달함을 박동(최상단 → 어느 하위 단계 hang 도 감지,
+        # 잡힌 예외 폴에도 박동되어 일시 장애 시 restart storm 없음).
+        heartbeat.beat()
         if os.path.exists(kill_file):
             notifier.notify("[KILL] kill-switch file present → halting")
             break
@@ -152,6 +173,9 @@ def main(config_path: str = "config.yaml") -> None:
         try:
             state = run_poll_once(state, exchange, params, notifier, now, atr14)
             store.save(state)
+            if not first_poll_ok:  # '기동했지만 루프가 죽음'을 즉시 가시화
+                first_poll_ok = True
+                notifier.notify("[OK] first poll completed — loop alive")
             if state.status == Status.HALTED:
                 notifier.notify("[HALT] entering halted state — stopping loop")
                 break

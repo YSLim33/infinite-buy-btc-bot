@@ -23,6 +23,12 @@ taker_fee: 0.004         # Kraken Pro 저볼륨 taker ≈ 0.4% (TP 매도측 손
 slippage: 0.0005         # dry-run/backtest 모의 슬리피지
 seed_usdt: 1000          # dry-run 가상 시드 (live 는 거래소 잔고를 사용)
 
+# 운영 안정성 (Stage 2.7 — 라이브니스 하드닝; 모두 선택값, 미기재 시 기본값 적용)
+ccxt_timeout_ms: 20000          # ccxt 네트워크 호출 타임아웃 ms (행 방지 1차 방어선)
+watchdog_timeout_seconds: 600   # 폴 루프 무박동이 이 시간 초과 시 프로세스 종료→재시작
+watchdog_interval_seconds: 15   # 워치독 점검 주기 s
+heartbeat_file: data/.heartbeat # 박동 파일(외부 헬스체크 가시성용; data/ 는 .gitignore)
+
 # 영속/운영
 state_db: data/june_bot.db
 log_file: data/june_bot.log
