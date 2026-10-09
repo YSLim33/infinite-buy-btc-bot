@@ -92,6 +92,9 @@ class State:
     step_target_usdt: float  # 진행 중 스텝의 목표 USDT (0 = 진행 스텝 없음)
     step_filled_usdt: float  # 진행 스텝에 체결된 USDT
     open_limit: OpenLimit | None
+    # 직전 폴에서 관측된 미확정 잔고변화(USDT). 다음 폴에서 재확인돼야 입출금으로 처리.
+    # 기본값 None → 이 키가 없는 기존 저장상태도 그대로 로드됨.
+    pending_topup_delta: float | None = None
 
 
 # ----------------------------------------------------------------------------
@@ -282,6 +285,7 @@ def apply_topup(state: State, available_usdt: float, params: Params) -> State:
         cycle_cash_remaining=available_usdt,
         step_target_usdt=0.0,
         step_filled_usdt=0.0,
+        pending_topup_delta=None,
     )
 
 
