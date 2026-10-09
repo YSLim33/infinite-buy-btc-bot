@@ -259,10 +259,18 @@ def test_reconcile_auto_resumes_offline_fill():
 P_NOBUY = Params(topup_immediate_buy_on_deposit=False)
 
 
+def topup_confirmed(state, ex, params):
+    """2폴 확인: 1차 호출은 보류만(재분할 없음), 2차 호출에서 확정."""
+    first = check_and_apply_topup(state, ex, params, N, T0)
+    assert first.cycle_cash_remaining == state.cycle_cash_remaining  # 1차는 미적용
+    assert first.pending_topup_delta is not None
+    return check_and_apply_topup(first, ex, params, N, T0)
+
+
 def test_topup_resplit_no_immediate_preserves_position():
     ex = FakeExchange(price=50000.0, free_usdt=5000.0)  # 입금: 5000 vs cycle_cash 3900
     state = mid_state(cycle_cash_remaining=3900.0)
-    out = check_and_apply_topup(state, ex, P_NOBUY, N, T0)
+    out = topup_confirmed(state, ex, P_NOBUY)
     assert out.cycle_cash_remaining == pytest.approx(5000.0)
     assert out.tranche_usdt == pytest.approx(125.0)  # 5000/40
     assert out.tranches_used == 0
@@ -275,7 +283,7 @@ def test_topup_resplit_no_immediate_preserves_position():
 def test_topup_immediate_buy_sets_new_ref():
     ex = FakeExchange(price=50000.0, free_usdt=5000.0)
     state = mid_state(cycle_cash_remaining=3900.0, ref=48000.0)
-    out = check_and_apply_topup(state, ex, P, N, T0)  # P: immediate=True
+    out = topup_confirmed(state, ex, P)  # P: immediate=True
     assert len(ex.market_buys) == 1
     assert ex.market_buys[0] == pytest.approx(125.0)  # 1 tranche
     assert out.tranches_used == 1  # 즉시 1매수 완료
@@ -292,7 +300,7 @@ def test_topup_resumes_from_cash_exhausted():
         position_qty=0.08,
         invested_usdt=4000.0,
     )
-    out = check_and_apply_topup(state, ex, P_NOBUY, N, T0)
+    out = topup_confirmed(state, ex, P_NOBUY)
     assert out.status == Status.RUNNING
     assert out.tranches_used == 0
     assert out.cycle_cash_remaining == pytest.approx(1000.0)
@@ -332,7 +340,7 @@ def test_topup_not_triggered_by_bot_own_buy():
 def test_topup_idempotent():
     ex = FakeExchange(price=50000.0, free_usdt=5000.0)
     state = mid_state(cycle_cash_remaining=3900.0)
-    out1 = check_and_apply_topup(state, ex, P_NOBUY, N, T0)
+    out1 = topup_confirmed(state, ex, P_NOBUY)
     assert out1.cycle_cash_remaining == pytest.approx(5000.0)
     out2 = check_and_apply_topup(out1, ex, P_NOBUY, N, T0)  # 재호출 → 재트리거 없음
     assert out2.cycle_cash_remaining == pytest.approx(5000.0)
@@ -344,7 +352,10 @@ def test_topup_on_boot_reconcile():
     # 다운 중 입금: 저장 cycle_cash 3900, 거래소 free 5000
     ex = FakeExchange(price=50000.0, free_usdt=5000.0, base_balance=0.002)
     stored = mid_state(cycle_cash_remaining=3900.0, position_qty=0.002)
-    out = reconcile(stored, ex, P_NOBUY, N, T0)
+    booted = reconcile(stored, ex, P_NOBUY, N, T0)
+    assert booted.cycle_cash_remaining == 3900.0  # 부팅 폴은 보류만
+    assert booted.pending_topup_delta == pytest.approx(1100.0)
+    out = check_and_apply_topup(booted, ex, P_NOBUY, N, T0)  # 첫 폴에서 확정
     assert out.status == Status.RUNNING
     assert out.cycle_cash_remaining == pytest.approx(5000.0)
     assert out.tranches_used == 0
@@ -365,7 +376,7 @@ def test_topup_withdrawal_50pct_resplits_no_buy():
     state = mid_state(
         cycle_cash_remaining=3900.0, position_qty=0.002, invested_usdt=100.0
     )
-    out = check_and_apply_topup(state, ex, P, N, T0)
+    out = topup_confirmed(state, ex, P)
     assert out.status == Status.RUNNING  # HALT 아님
     assert out.cycle_cash_remaining == pytest.approx(1950.0)  # 축소 재분할
     assert out.tranche_usdt == pytest.approx(48.75)  # 1950/40
@@ -380,7 +391,7 @@ def test_topup_withdrawal_below_min_cash_exhausted():
     # 거의 전액 출금 → 가용 < min_notional, 포지션 보유 → CASH_EXHAUSTED (HALT 아님)
     ex = FakeExchange(price=50000.0, free_usdt=2.0)
     state = mid_state(cycle_cash_remaining=3900.0, position_qty=0.002)
-    out = check_and_apply_topup(state, ex, P, N, T0)
+    out = topup_confirmed(state, ex, P)
     assert out.status == Status.CASH_EXHAUSTED
     assert out.position_qty == 0.002  # 포지션 보존
     assert ex.market_buys == []
@@ -409,7 +420,77 @@ def test_topup_skipped_at_tp():
 def test_run_poll_once_topup_then_chase():
     ex = FakeExchange(price=50000.0, free_usdt=5000.0)
     state = mid_state(cycle_cash_remaining=3900.0, ref=50000.0)
-    state = run_poll_once(state, ex, P, N, T0, atr14=500.0)
+    state = run_poll_once(state, ex, P, N, T0, atr14=500.0)  # 1폴: 보류
+    assert ex.market_buys == []
+    state = run_poll_once(state, ex, P, N, T0, atr14=500.0)  # 2폴: 확정
     assert len(ex.market_buys) == 1  # 즉시 1매수
     assert state.tranches_used == 1
     assert state.open_limit is not None  # 새 ref 로 추격 지정가 설치
+
+
+# --- 2폴 확인: Kraken 체결 직후 일시적 잔고 하락 오판 방지 (2026-10-08 실사례) ----
+def test_topup_transient_dip_after_fill_not_treated_as_withdrawal():
+    # 실사례: 장부 760.41, 지정가 체결 직후 total 이 체결액(19.13)만큼 낮게 응답 → 743.22
+    ex = FakeExchange(price=81115.1, free_usdt=743.22)
+    state = mid_state(cycle_cash_remaining=760.41, tranche_usdt=19.06, tranches_used=20)
+    out = check_and_apply_topup(state, ex, P, N, T0)
+    assert out.pending_topup_delta == pytest.approx(-17.19)  # 보류만
+    assert out.tranche_usdt == 19.06  # 재분할 없음
+    assert out.tranches_used == 20
+    ex.free_usdt = 762.35  # 다음 폴: 정산 완료 → 정상값
+    out = check_and_apply_topup(out, ex, P, N, T0)
+    assert out.pending_topup_delta is None  # 일시적 → 폐기
+    assert out.cycle_cash_remaining == 760.41
+    assert out.tranche_usdt == 19.06
+    assert out.tranches_used == 20
+    assert ex.market_buys == []
+
+
+def test_topup_sign_flip_rearms_instead_of_confirming():
+    ex = FakeExchange(price=50000.0, free_usdt=3850.0)  # -50
+    state = mid_state(cycle_cash_remaining=3900.0)
+    out = check_and_apply_topup(state, ex, P_NOBUY, N, T0)
+    assert out.pending_topup_delta == pytest.approx(-50.0)
+    ex.free_usdt = 3950.0  # +50: 반대 방향 → 확정 아님, 새 후보로 재보류
+    out = check_and_apply_topup(out, ex, P_NOBUY, N, T0)
+    assert out.pending_topup_delta == pytest.approx(50.0)
+    assert out.cycle_cash_remaining == 3900.0
+    out = check_and_apply_topup(out, ex, P_NOBUY, N, T0)  # 같은 +50 재관측 → 확정
+    assert out.pending_topup_delta is None
+    assert out.cycle_cash_remaining == pytest.approx(3950.0)
+
+
+def test_topup_magnitude_change_rearms():
+    ex = FakeExchange(price=50000.0, free_usdt=3850.0)  # -50
+    state = mid_state(cycle_cash_remaining=3900.0)
+    out = check_and_apply_topup(state, ex, P_NOBUY, N, T0)
+    ex.free_usdt = 3700.0  # -200: 크기 차이 > 임계 → 재보류
+    out = check_and_apply_topup(out, ex, P_NOBUY, N, T0)
+    assert out.pending_topup_delta == pytest.approx(-200.0)
+    assert out.cycle_cash_remaining == 3900.0
+    out = check_and_apply_topup(out, ex, P_NOBUY, N, T0)
+    assert out.cycle_cash_remaining == pytest.approx(3700.0)
+
+
+def test_topup_confirms_within_tolerance():
+    # 확인 사이 미세 변동(≤ 임계)은 같은 변화로 본다 → 2차 관측값으로 재분할
+    ex = FakeExchange(price=50000.0, free_usdt=3850.0)  # -50
+    state = mid_state(cycle_cash_remaining=3900.0)
+    out = check_and_apply_topup(state, ex, P_NOBUY, N, T0)
+    ex.free_usdt = 3846.0  # -54
+    out = check_and_apply_topup(out, ex, P_NOBUY, N, T0)
+    assert out.pending_topup_delta is None
+    assert out.cycle_cash_remaining == pytest.approx(3846.0)
+
+
+def test_run_poll_once_transient_dip_no_resplit():
+    # 폴 루프 경로로도 단발 하락은 재분할하지 않는다
+    ex = FakeExchange(price=50000.0, free_usdt=3800.0)  # -100 일시 하락
+    state = mid_state(cycle_cash_remaining=3900.0)
+    state = run_poll_once(state, ex, P, N, T0, atr14=500.0)
+    assert state.pending_topup_delta == pytest.approx(-100.0)
+    ex.free_usdt = 3900.0  # 정상 복귀
+    state = run_poll_once(state, ex, P, N, T0, atr14=500.0)
+    assert state.pending_topup_delta is None
+    assert state.tranche_usdt == 100.0
+    assert state.tranches_used == 1

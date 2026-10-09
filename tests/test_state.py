@@ -1,5 +1,7 @@
 """SQLite 영속화 라운드트립 — 재시작에도 상태 유실 금지(§5)."""
 
+import json
+from dataclasses import replace
 from datetime import datetime
 
 from src.state import StateStore, state_from_json, state_to_json
@@ -53,3 +55,15 @@ def test_load_empty_returns_none(tmp_path):
     store = StateStore(str(tmp_path / "empty.db"))
     assert store.load() is None
     store.close()
+
+
+def test_json_roundtrip_pending_topup_delta():
+    s = replace(start_cycle(1000.0, Params(), cycle_id=1), pending_topup_delta=-17.19)
+    assert state_from_json(state_to_json(s)).pending_topup_delta == -17.19
+
+
+def test_load_legacy_json_without_pending_key():
+    # 배포 전 VM DB 에 저장된 상태(키 없음)도 그대로 로드돼야 한다
+    d = json.loads(state_to_json(start_cycle(1000.0, Params(), cycle_id=1)))
+    del d["pending_topup_delta"]
+    assert state_from_json(json.dumps(d)).pending_topup_delta is None

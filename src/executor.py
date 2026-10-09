@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import datetime
 
@@ -34,6 +35,8 @@ from src.strategy import (
     start_cycle,
     update_limit_seen,
 )
+
+log = logging.getLogger("june_bot")
 
 DUST = 1e-9
 MAX_STEPS_PER_POLL = 6  # 같은 폴 안에서 재결정 반복 상한(무한루프 가드)
@@ -124,6 +127,11 @@ def check_and_apply_topup(state, exchange, params, notifier, now: datetime) -> S
     봇 자신의 매수(현금↓)·익절(start_cycle 리셋)은 기준이 state 라 자연 분리 → 오탐 없음.
     멱등(적용 후 cycle_cash_remaining=가용 → 다음 폴 재트리거 없음). HALTED/비활성이면 미적용.
     USDT 변화로는 HALT 하지 않는다(출금은 정상 축소 — HALT 은 reconcile 의 BTC 불일치 등만).
+
+    2폴 확인: 임계 초과 변화는 즉시 처리하지 않고 pending_topup_delta 로 보류한 뒤,
+    다음 폴에서 같은 방향·비슷한 크기(차이 ≤ 임계)로 재관측될 때만 입출금으로 확정한다.
+    Kraken 은 지정가 체결 직후 BalanceEx 가 체결액만큼 일시적으로 낮게 응답할 수 있어
+    (실측 2026-06-18·07-17·10-08, 체결 ~3초 후 −체결액) 단일 관측은 출금으로 오판된다.
     """
     if not params.topup_enabled or state.status == Status.HALTED:
         return state
@@ -131,8 +139,32 @@ def check_and_apply_topup(state, exchange, params, notifier, now: datetime) -> S
     available = exchange.fetch_total_usdt()
     delta = available - state.cycle_cash_remaining
     threshold = max(params.min_notional, params.topup_threshold)
+    pending = state.pending_topup_delta
     if abs(delta) <= threshold:  # 의미있는 변화 아님(봇 자체 활동·미세 드리프트)
+        if pending is not None:  # 직전 관측은 일시적 → 보류 폐기
+            log.info(
+                "topup pending %+.2f USDT cleared (now %+.2f, transient)",
+                pending,
+                delta,
+            )
+            state = replace(state, pending_topup_delta=None)
         return state
+
+    if (
+        pending is None
+        or (pending > 0) != (delta > 0)
+        or abs(delta - pending) > threshold
+    ):
+        # 1차 관측(또는 직전과 다른 변화) → 보류만 하고 다음 폴에서 재확인
+        log.info(
+            "topup candidate %+.2f USDT (total %.2f vs cash %.2f) — awaiting next-poll confirm",
+            delta,
+            available,
+            state.cycle_cash_remaining,
+        )
+        return replace(state, pending_topup_delta=delta)
+
+    state = replace(state, pending_topup_delta=None)  # 2폴 연속 관측 → 확정
 
     # 익절 시점이면 topup 건너뜀 — TP 가 새 사이클에서 잔여현금(입출금 포함)을 흡수.
     if should_take_profit(state, exchange.fetch_price(), params):
